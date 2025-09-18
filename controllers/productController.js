@@ -1,71 +1,113 @@
 import Product from '../models/Product.js';
 import Category from '../models/Category.js';
+import notificationService from '../services/notificationService.js';
+import { asyncHandler } from '../middleware/enhancedErrorHandler.js';
+import logger from '../config/logger.js';
 
 // @desc    Get all products
 // @route   GET /api/products
 // @access  Public
-export const getProducts = async (req, res) => {
-  try {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 12;
-    const skip = (page - 1) * limit;
+export const getProducts = asyncHandler(async (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 12;
+  const skip = (page - 1) * limit;
 
-    // Build filter object
-    const filter = {};
-    
-    if (req.query.category) {
-      filter.category = req.query.category;
-    }
-    
-    if (req.query.brand) {
-      filter.brand = new RegExp(req.query.brand, 'i');
-    }
-    
-    if (req.query.minPrice || req.query.maxPrice) {
-      filter.price = {};
-      if (req.query.minPrice) filter.price.$gte = parseFloat(req.query.minPrice);
-      if (req.query.maxPrice) filter.price.$lte = parseFloat(req.query.maxPrice);
-    }
-    
-    if (req.query.inStock === 'true') {
-      filter.inStock = true;
-    }
-
-    // Build sort object
-    let sort = {};
-    if (req.query.sortBy) {
-      const [field, order] = req.query.sortBy.split(':');
-      sort[field] = order === 'desc' ? -1 : 1;
-    } else {
-      sort.createdAt = -1; // Default sort by newest
-    }
-
-    const products = await Product.find(filter)
-      .populate('category', 'name')
-      .sort(sort)
-      .skip(skip)
-      .limit(limit);
-
-    const total = await Product.countDocuments(filter);
-
-    res.json({
-      success: true,
-      data: products,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit)
-      }
-    });
-  } catch (error) {
-    console.error('Get products error:', error);
-    res.status(500).json({
+  // Validate pagination params
+  if (page < 1 || limit < 1 || limit > 100) {
+    return res.status(400).json({
       success: false,
-      message: 'Server error while fetching products'
+      message: 'Invalid pagination parameters'
     });
   }
-};
+
+  // Build filter object
+  const filter = {};
+  
+  if (req.query.category) {
+    filter.category = req.query.category;
+  }
+  
+  if (req.query.brand) {
+    filter.brand = new RegExp(req.query.brand, 'i');
+  }
+  
+  if (req.query.minPrice || req.query.maxPrice) {
+    filter.price = {};
+    if (req.query.minPrice) {
+      const minPrice = parseFloat(req.query.minPrice);
+      if (isNaN(minPrice) || minPrice < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid minimum price'
+        });
+      }
+      filter.price.$gte = minPrice;
+    }
+    if (req.query.maxPrice) {
+      const maxPrice = parseFloat(req.query.maxPrice);
+      if (isNaN(maxPrice) || maxPrice < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid maximum price'
+        });
+      }
+      filter.price.$lte = maxPrice;
+    }
+  }
+  
+  if (req.query.inStock === 'true') {
+    filter.inStock = true;
+  }
+
+  // Add active filter to only show active products
+  filter.isActive = true;
+
+  // Build sort object
+  let sort = {};
+  if (req.query.sortBy) {
+    const [field, order] = req.query.sortBy.split(':');
+    const validSortFields = ['name', 'price', 'createdAt', 'rating.average'];
+    if (validSortFields.includes(field)) {
+      sort[field] = order === 'desc' ? -1 : 1;
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid sort field'
+      });
+    }
+  } else {
+    sort.createdAt = -1; // Default sort by newest
+  }
+
+  const products = await Product.find(filter)
+    .populate('category', 'name')
+    .sort(sort)
+    .skip(skip)
+    .limit(limit)
+    .lean(); // Use lean for better performance
+
+  const total = await Product.countDocuments(filter);
+
+  logger.info('Products fetched', {
+    page,
+    limit,
+    total,
+    filters: filter,
+    sort,
+    requestId: req.id
+  });
+
+  res.json({
+    success: true,
+    data: products,
+    pagination: {
+      page,
+      limit,
+      total,
+      pages: Math.ceil(total / limit)
+    }
+  });
+});
 
 // @desc    Get single product
 // @route   GET /api/products/:id
@@ -99,24 +141,102 @@ export const getProduct = async (req, res) => {
 // @desc    Create new product
 // @route   POST /api/products
 // @access  Private/Admin
-export const createProduct = async (req, res) => {
-  try {
-    const product = new Product(req.body);
-    const savedProduct = await product.save();
+export const createProduct = asyncHandler(async (req, res) => {
+  const {
+    name,
+    description,
+    price,
+    originalPrice,
+    category,
+    brand,
+    stockQuantity,
+    image,
+    images,
+    specifications,
+    features,
+    tags,
+    weight,
+    dimensions,
+    warranty
+  } = req.body;
 
-    res.status(201).json({
-      success: true,
-      message: 'Product created successfully',
-      data: savedProduct
-    });
-  } catch (error) {
-    console.error('Create product error:', error);
-    res.status(500).json({
+  // Validate required fields
+  if (!name || !description || !price || !category) {
+    return res.status(400).json({
       success: false,
-      message: 'Server error while creating product'
+      message: 'Name, description, price, and category are required'
     });
   }
-};
+
+  // Validate price
+  if (price <= 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Price must be greater than 0'
+    });
+  }
+
+  // Validate original price if provided
+  if (originalPrice && originalPrice <= price) {
+    return res.status(400).json({
+      success: false,
+      message: 'Original price must be greater than current price'
+    });
+  }
+
+  // Check if category exists
+  const categoryExists = await Category.findById(category);
+  if (!categoryExists) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid category'
+    });
+  }
+
+  const product = new Product({
+    name: name.trim(),
+    description: description.trim(),
+    price,
+    originalPrice,
+    category,
+    brand: brand?.trim(),
+    stockQuantity: stockQuantity || 0,
+    inStock: (stockQuantity || 0) > 0,
+    image: image || '/placeholder.svg',
+    images: images || [],
+    specifications: specifications || {},
+    features: features || [],
+    tags: tags || [],
+    weight,
+    dimensions,
+    warranty
+  });
+
+  const savedProduct = await product.save();
+  await savedProduct.populate('category', 'name');
+
+  // Emit socket event for real-time update
+  notificationService.broadcast('product_created', {
+    productId: savedProduct._id,
+    productName: savedProduct.name,
+    category: savedProduct.category?.name,
+    price: savedProduct.price,
+    timestamp: new Date()
+  });
+
+  logger.info('Product created', {
+    productId: savedProduct._id,
+    productName: savedProduct.name,
+    adminId: req.user._id,
+    requestId: req.id
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Product created successfully',
+    data: savedProduct
+  });
+});
 
 // @desc    Update product
 // @route   PUT /api/products/:id
@@ -133,6 +253,26 @@ export const updateProduct = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Product not found'
+      });
+    }
+
+    // Emit socket event for real-time update
+    notificationService.broadcast('product_updated', {
+      productId: product._id,
+      productName: product.name,
+      category: product.category?.name,
+      price: product.price,
+      changes: req.body,
+      timestamp: new Date()
+    });
+
+    // Check for low stock and emit alert if necessary
+    if (product.stockQuantity <= 5 && product.stockQuantity > 0) {
+      notificationService.emitToAdmins('low_stock_alert', {
+        productId: product._id,
+        productName: product.name,
+        quantity: product.stockQuantity,
+        timestamp: new Date()
       });
     }
 
@@ -163,6 +303,13 @@ export const deleteProduct = async (req, res) => {
         message: 'Product not found'
       });
     }
+
+    // Emit socket event for real-time update
+    notificationService.broadcast('product_deleted', {
+      productId: req.params.id,
+      productName: product.name,
+      timestamp: new Date()
+    });
 
     res.json({
       success: true,

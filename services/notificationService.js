@@ -502,6 +502,69 @@ class NotificationService {
     return `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
 
+  // Broadcast event to all connected users
+  broadcast(event, data) {
+    if (this.io) {
+      this.io.emit(event, data);
+      logger.info('Broadcast event sent', { event, connectedUsers: this.connectedUsers.size });
+    }
+  }
+
+  // Emit event to admin users only
+  async emitToAdmins(event, data) {
+    try {
+      const adminUsers = await User.find({ role: 'admin' }).select('_id');
+      const adminIds = adminUsers.map(user => user._id.toString());
+      
+      adminIds.forEach(adminId => {
+        if (this.connectedUsers.has(adminId)) {
+          const socketId = this.connectedUsers.get(adminId);
+          this.io.to(socketId).emit(event, data);
+        }
+      });
+
+      logger.info('Event sent to admins', { event, adminCount: adminIds.length });
+    } catch (error) {
+      logger.error('Failed to emit to admins', { event, error: error.message });
+    }
+  }
+
+  // Emit event to specific users by role
+  async emitToRole(role, event, data) {
+    try {
+      const users = await User.find({ role }).select('_id');
+      const userIds = users.map(user => user._id.toString());
+      
+      userIds.forEach(userId => {
+        if (this.connectedUsers.has(userId)) {
+          const socketId = this.connectedUsers.get(userId);
+          this.io.to(socketId).emit(event, data);
+        }
+      });
+
+      logger.info('Event sent to role', { role, event, userCount: userIds.length });
+    } catch (error) {
+      logger.error('Failed to emit to role', { role, event, error: error.message });
+    }
+  }
+
+  // Emit event to specific user
+  emitToUser(userId, event, data) {
+    const userIdStr = userId.toString();
+    if (this.connectedUsers.has(userIdStr)) {
+      const socketId = this.connectedUsers.get(userIdStr);
+      this.io.to(socketId).emit(event, data);
+      logger.info('Event sent to user', { userId: userIdStr, event });
+      return true;
+    }
+    return false;
+  }
+
+  // Get connected users count
+  getConnectedUsersCount() {
+    return this.connectedUsers.size;
+  }
+
   // Cleanup method for graceful shutdown
   cleanup() {
     if (this.io) {

@@ -1,5 +1,6 @@
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
+import notificationService from '../services/notificationService.js';
 
 // @desc    Create new order
 // @route   POST /api/orders
@@ -58,6 +59,7 @@ export const createOrder = async (req, res) => {
     });
 
     const createdOrder = await order.save();
+    await createdOrder.populate('user', 'name email');
 
     // Update product stock quantities
     await Promise.all(
@@ -70,6 +72,18 @@ export const createOrder = async (req, res) => {
         await product.save();
       })
     );
+
+    // Emit socket event for new order (to admins)
+    notificationService.emitToAdmins('new_order', {
+      orderId: createdOrder._id,
+      orderNumber: createdOrder.orderNumber,
+      customerName: createdOrder.user?.name || 'Unknown',
+      customerEmail: createdOrder.user?.email || 'Unknown',
+      totalPrice: createdOrder.totalPrice,
+      status: createdOrder.status,
+      itemCount: createdOrder.items.length,
+      timestamp: new Date()
+    });
 
     res.status(201).json({
       success: true,
@@ -170,7 +184,7 @@ export const updateOrderStatus = async (req, res) => {
   try {
     const { status } = req.body;
     
-    const order = await Order.findById(req.params.id);
+    const order = await Order.findById(req.params.id).populate('user', 'name email');
 
     if (!order) {
       return res.status(404).json({
@@ -179,6 +193,7 @@ export const updateOrderStatus = async (req, res) => {
       });
     }
 
+    const oldStatus = order.orderStatus;
     order.orderStatus = status;
 
     if (status === 'delivered') {
@@ -187,6 +202,26 @@ export const updateOrderStatus = async (req, res) => {
     }
 
     const updatedOrder = await order.save();
+
+    // Emit socket event for order status update
+    notificationService.emitToUser(order.user._id, 'order_status_updated', {
+      orderId: updatedOrder._id,
+      orderNumber: updatedOrder.orderNumber,
+      oldStatus,
+      newStatus: status,
+      status,
+      timestamp: new Date()
+    });
+
+    // Also emit to admins for dashboard updates
+    notificationService.emitToAdmins('order_status_changed', {
+      orderId: updatedOrder._id,
+      orderNumber: updatedOrder.orderNumber,
+      customerName: order.user?.name || 'Unknown',
+      oldStatus,
+      newStatus: status,
+      timestamp: new Date()
+    });
 
     res.json({
       success: true,
