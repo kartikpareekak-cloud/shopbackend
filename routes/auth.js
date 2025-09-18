@@ -3,6 +3,7 @@ import { body } from 'express-validator';
 import { 
   register, 
   login, 
+  adminLogin,
   getProfile, 
   updateProfile, 
   forgotPassword, 
@@ -50,6 +51,7 @@ router.get('/test', (req, res) => {
 });
 router.post('/register', register);  // Temporarily remove validation
 router.post('/login', loginValidation, login);
+router.post('/admin-login', loginValidation, adminLogin);
 router.get('/profile', protect, getProfile);
 router.put('/profile', protect, profileUpdateValidation, updateProfile);
 router.post('/forgot-password', [

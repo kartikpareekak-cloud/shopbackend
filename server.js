@@ -31,6 +31,7 @@ import recommendationRoutes from './routes/recommendationRoutes.js';
 import contactRoutes from './routes/contact.js';
 import userDashboardRoutes from './routes/userDashboard.js';
 import enhancedCartRoutes from './routes/enhancedCart.js';
+import invoiceRoutes from './routes/invoices.js';
 import logger from './config/logger.js';
 // import paymentMonitoringService from './services/paymentMonitoring.js';
 
@@ -182,6 +183,7 @@ app.use('/api/contact', contactRoutes);
 // Phase 2.3 Enhanced Routes
 app.use('/api/user/dashboard', userDashboardRoutes);
 app.use('/api/cart', enhancedCartRoutes);
+app.use('/api/invoices', invoiceRoutes);
 
 // Health check endpoint with comprehensive status
 app.get(process.env.HEALTH_CHECK_ENDPOINT || '/health', async (req, res) => {

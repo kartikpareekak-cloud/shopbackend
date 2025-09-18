@@ -3,6 +3,7 @@ import { generateToken } from '../middleware/auth.js';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { logger } from '../middleware/errorHandler.js';
+import emailService from '../services/emailService.js';
 
 // @desc    Register a new user
 // @route   POST /api/auth/register
@@ -47,6 +48,15 @@ export const register = async (req, res) => {
     });
 
     logger.info('User created successfully', { userId: user._id, email });
+
+    // Send welcome email
+    try {
+      await emailService.sendWelcomeEmail(user);
+      console.log('✅ Welcome email sent to:', user.email);
+    } catch (emailError) {
+      console.error('❌ Failed to send welcome email:', emailError);
+      // Don't fail registration if email fails
+    }
 
     const token = generateToken(user._id);
     const responseData = {
@@ -171,6 +181,86 @@ export const login = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Server error during login',
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+};
+
+// @desc    Admin login with environment credentials
+// @route   POST /api/auth/admin-login
+// @access  Public
+export const adminLogin = async (req, res) => {
+  try {
+    logger.info('Admin login attempt', { email: req.body.email });
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      logger.warn('Admin login failed - missing credentials');
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
+    }
+
+    // Check against environment variables for admin credentials
+    const adminEmail = process.env.ADMIN_EMAIL;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminEmail || !adminPassword) {
+      logger.error('Admin credentials not configured in environment');
+      return res.status(500).json({
+        success: false,
+        message: 'Admin credentials not configured'
+      });
+    }
+
+    // Validate admin credentials against environment
+    if (email !== adminEmail || password !== adminPassword) {
+      logger.warn('Admin login failed - invalid credentials', { email });
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid admin credentials'
+      });
+    }
+
+    // Find admin user in database
+    const adminUser = await User.findOne({ email: adminEmail, role: 'admin' }).select('+password');
+    
+    if (!adminUser) {
+      logger.error('Admin user not found in database', { email: adminEmail });
+      return res.status(401).json({
+        success: false,
+        message: 'Admin user not found. Please run admin setup script.'
+      });
+    }
+
+    logger.info('Admin login successful', { email, userId: adminUser._id });
+    
+    const token = generateToken(adminUser._id);
+    const responseData = {
+      _id: adminUser._id,
+      name: adminUser.name,
+      email: adminUser.email,
+      role: adminUser.role,
+      token: token
+    };
+
+    logger.debug('Admin login response prepared', { email, userId: adminUser._id });
+
+    res.json({
+      success: true,
+      message: 'Admin login successful',
+      data: responseData
+    });
+  } catch (error) {
+    logger.error('Admin login error', { 
+      error: error.message, 
+      stack: error.stack,
+      email: req.body.email 
+    });
+    res.status(500).json({
+      success: false,
+      message: 'Server error during admin login',
       error: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }

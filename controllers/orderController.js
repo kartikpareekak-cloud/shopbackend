@@ -1,6 +1,7 @@
 import Order from '../models/Order.js';
 import Product from '../models/Product.js';
 import notificationService from '../services/notificationService.js';
+import emailService from '../services/emailService.js';
 
 // @desc    Create new order
 // @route   POST /api/orders
@@ -84,6 +85,25 @@ export const createOrder = async (req, res) => {
       itemCount: createdOrder.items.length,
       timestamp: new Date()
     });
+
+    // Emit socket event to the user who placed the order
+    notificationService.emitToUser(req.user._id, 'new_order', {
+      orderId: createdOrder._id,
+      orderNumber: createdOrder.orderNumber,
+      totalPrice: createdOrder.totalPrice,
+      status: createdOrder.status,
+      itemCount: createdOrder.items.length,
+      timestamp: new Date()
+    });
+
+    // Send order confirmation email
+    try {
+      await emailService.sendOrderConfirmation(createdOrder, createdOrder.user.email);
+      console.log('✅ Order confirmation email sent');
+    } catch (emailError) {
+      console.error('❌ Failed to send order confirmation email:', emailError);
+      // Don't fail the order creation if email fails
+    }
 
     res.status(201).json({
       success: true,
@@ -222,6 +242,15 @@ export const updateOrderStatus = async (req, res) => {
       newStatus: status,
       timestamp: new Date()
     });
+
+    // Send order status update email
+    try {
+      await emailService.sendOrderStatusUpdate(updatedOrder, order.user.email, oldStatus, status);
+      console.log('✅ Order status update email sent');
+    } catch (emailError) {
+      console.error('❌ Failed to send order status update email:', emailError);
+      // Don't fail the status update if email fails
+    }
 
     res.json({
       success: true,
@@ -461,6 +490,28 @@ export const createCODOrder = async (req, res) => {
       { path: 'items.product', select: 'name price image images' },
       { path: 'user', select: 'name email phone' }
     ]);
+
+    // Emit socket events for new order
+    notificationService.emitToAdmins('new_order', {
+      orderId: createdOrder._id,
+      orderNumber: createdOrder.orderNumber || createdOrder._id,
+      customerName: req.user.name || 'Unknown',
+      customerEmail: req.user.email || 'Unknown',
+      totalPrice: createdOrder.totalPrice,
+      status: createdOrder.status,
+      itemCount: createdOrder.items.length,
+      timestamp: new Date()
+    });
+
+    // Emit socket event to the user who placed the order
+    notificationService.emitToUser(req.user._id, 'new_order', {
+      orderId: createdOrder._id,
+      orderNumber: createdOrder.orderNumber || createdOrder._id,
+      totalPrice: createdOrder.totalPrice,
+      status: createdOrder.status,
+      itemCount: createdOrder.items.length,
+      timestamp: new Date()
+    });
 
     res.status(201).json({
       success: true,
